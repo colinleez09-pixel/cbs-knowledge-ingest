@@ -1,7 +1,7 @@
 ---
 name: cbs-case-scenario-analyze
 description: 分析 CBS 历史用例提取测试场景知识并入库 GBrain，脚本完成提取/字段级补丁/重建验证/骨架生成/门禁校验，AI 负责语义分析与证据标注；当用户需要分析历史用例提取场景、用例场景知识入库 GBrain 或按场景增量维护测试知识时使用
-version: 2.0.0
+version: 2.0.2
 mutating: true
 ---
 
@@ -38,17 +38,26 @@ mutating: true
   ```
 - 输出：`case-data.json`（含字段树、变量图、脚本补丁、匹配候选）
 
-#### Step 1.5: 获取完整资产 JSON（必须步骤）
-- AI 必须读取完整候选资产 JSON 后才能裁决匹配。脚本批量获取所有候选资产并生成 manifest。
+#### Step 1.5: 获取完整资产 JSON（必须步骤，优先 API）
+- **此步骤不可跳过。** AI 必须在 Step 2 之前运行此脚本，确保所有候选资产的完整 JSON 可用。
+- **数据源优先级**：API 接口 > 本地文件。如果用户提供了 `--api-url` 参数，必须通过 API 获取资产 JSON，不要依赖本地 `steps/` 目录中可能过期的文件。仅当无 API 参数时才读取本地文件。
+- 脚本批量获取所有候选资产并生成 manifest，支持断点续传（已下载且 id 一致则跳过）。
 - 脚本调用示例：
   ```
+  # 有 API 时（优先）
   bun scripts/fetch-asset-by-id.ts \
     --api-url <url> --username <user> --password <pass> \
     --asset-id <id1> [--asset-id <id2> ...] \
     --out-dir <asset-dir>
+  
+  # 无 API 时（兜底，读取本地文件生成 manifest）
+  bun scripts/fetch-asset-by-id.ts \
+    --asset-id <id1> [--asset-id <id2> ...] \
+    --out-dir <asset-dir>
   ```
-- 输出：每个资产 `<name>.json` + `asset-manifest.json`（含 content_hash、缓存状态）
+- 输出：每个资产 `<name>.json` + `asset-manifest.json`（含 content_hash、缓存状态、fetched/cached/failed 统计）
 - 缓存策略：基于 asset_id 文件名匹配，已存在且 id 一致则跳过重新下载
+- **AI 读取资产时，必须从此脚本的 `--out-dir` 输出目录读取，禁止自行搜索其他本地路径**
 
 #### Step 2: 生成分析草稿骨架
 - 脚本读取 case-data.json，调用 computeSignatures 计算四签名，为每个步骤确定 construction_mode，生成匹配/未匹配步骤的骨架。
@@ -67,7 +76,7 @@ mutating: true
 - AI 读取以下文件后执行语义分析：
   1. `analysis-draft.json` — 草稿骨架
   2. `case-data.json` — 字段树、变量图、脚本补丁
-  3. **完整候选资产 JSON**（`<asset-dir>/*.json`）— 必须读取后才能裁决匹配
+  3. **完整候选资产 JSON** — 从 Step 1.5 输出目录（`<asset-dir>`）读取，禁止从其他本地路径搜索
   4. `analysis-notes.md` — 笔记模板
 
 - AI 必须完成的工作：

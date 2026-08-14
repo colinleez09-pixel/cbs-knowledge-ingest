@@ -19,7 +19,7 @@
  *   --out-dir 指定时同时把每个资产写入 <out-dir>/<asset_name>.json
  */
 
-import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { asArray, asString, isRecord, sha256, type AssetFetchManifest, type AssetManifestEntry, type JsonRecord } from './scenario-core.ts';
 
@@ -137,10 +137,111 @@ async function mainCli(): Promise<void> {
     } else throw new Error(`unknown arg: ${arg}`);
   }
 
-  if (!apiUrl) throw new Error('must provide --api-url (e.g. http://localhost:5000)');
   if (assetIds.length === 0) throw new Error('must provide at least one --asset-id');
-  if (!username) throw new Error('must provide --username');
-  if (!password) throw new Error('must provide --password');
+
+  // --- No-API mode: read local files and generate manifest ---
+  if (!apiUrl) {
+    if (!outDir) throw new Error('must provide --out-dir when no --api-url (local mode)');
+    const dir = resolve(outDir);
+    const assets: Record<string, JsonRecord> = {};
+    const manifestEntries: AssetManifestEntry[] = [];
+    let cached = 0;
+    let fetched = 0;
+    let failed = 0;
+
+    // Scan local dir for JSON files
+    const localFiles = existsSync(dir)
+      ? readdirSync(dir).filter((f: string) => f.endsWith('.json') && f !== 'asset-manifest.json')
+      : [];
+
+    for (const assetId of assetIds) {
+      let item: JsonRecord | null = null;
+      let localPath: string | null = null;
+      let contentHash: string | null = null;
+
+      // Try to find by asset-${id}.json first, then scan all files for matching id
+      const exactPath = join(dir, `asset-${assetId}.json`);
+      if (existsSync(exactPath)) {
+        try {
+          const content = readFileSync(exactPath, 'utf8');
+          item = JSON.parse(content) as JsonRecord;
+          localPath = exactPath;
+          contentHash = sha256(content);
+        } catch { /* ignore */ }
+      }
+
+      if (!item) {
+        // Scan all local JSON files for matching id
+        for (const fname of localFiles) {
+          const fpath = join(dir, fname);
+          try {
+            const content = readFileSync(fpath, 'utf8');
+            const json = JSON.parse(content) as JsonRecord;
+            const step = isRecord(json.step) ? json.step : json;
+            const components = isRecord(json.step) ? (isRecord(json.step.template_json) ? json.step.template_json : json.step) : json;
+            // Check by step.id or by components matching
+            if (String(step.id ?? '') === assetId || String(components.asset_id ?? '') === assetId) {
+              item = json;
+              localPath = fpath;
+              contentHash = sha256(content);
+              break;
+            }
+          } catch { /* ignore */ }
+        }
+      }
+
+      if (item) {
+        assets[assetId] = item;
+        cached++;
+      } else {
+        failed++;
+      }
+
+      const step = item && (isRecord(item.step) ? item.step : item);
+      manifestEntries.push({
+        asset_id: assetId,
+        asset_name: step ? asString(step.name) : assetId,
+        slug: null,
+        local_path: localPath,
+        content_hash: contentHash,
+        fetched: false,
+        fetch_error: item ? null : 'not found in local directory',
+      });
+    }
+
+    const manifest: AssetFetchManifest = {
+      generated_at: new Date().toISOString(),
+      api_url: '(local)',
+      total_assets: assetIds.length,
+      fetched,
+      cached,
+      failed,
+      entries: manifestEntries,
+    };
+
+    const manifestPath = join(dir, 'asset-manifest.json');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+
+    const missing = assetIds.filter((id) => !assets[id]);
+    console.log(
+      JSON.stringify({
+        status: missing.length === 0 ? 'success' : 'partial',
+        mode: 'local',
+        fetched,
+        cached,
+        failed,
+        missing,
+        assets,
+        manifest,
+      }, null, 2),
+    );
+    return;
+  }
+
+  // --- API mode: fetch from API ---
+  if (!username) throw new Error('must provide --username (or omit --api-url for local mode)');
+  if (!password) throw new Error('must provide --password (or omit --api-url for local mode)');
 
   const token = await loginForToken(apiUrl, username, password, 30000);
   const assets: Record<string, JsonRecord> = {};
