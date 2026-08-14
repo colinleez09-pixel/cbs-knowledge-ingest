@@ -26,20 +26,22 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import {
+  canonicalJson,
   gbrainGet,
   gbrainGraphQuery,
   gbrainLink,
   gbrainPut,
   gbrainStats,
   gbrainTimelineAdd,
+  isRecord,
   parseGbrainGetOutput,
   planPayloadSha256,
   runGbrain,
   sha256,
   type ScenarioPlan,
   type ScenarioPlanLink,
-  type ScenarioPlanPage,
   type ScenarioPlanTimeline,
+  type WritablePage,
 } from './scenario-core.ts';
 
 // --- Types ---
@@ -197,6 +199,123 @@ function getStatsPageCount(): number | null {
   }
 }
 
+// --- Safe extend for analysis-data pages ---
+
+function safeExtendAnalysisData(slug: string, newContent: string): { content: string; merged: boolean; message: string } {
+  if (!slug.endsWith('/analysis-data')) {
+    return { content: newContent, merged: false, message: 'not analysis-data page, skip merge' };
+  }
+
+  let newJson: unknown;
+  try {
+    newJson = JSON.parse(newContent);
+  } catch {
+    return { content: newContent, merged: false, message: 'new content is not valid JSON, skip merge' };
+  }
+
+  const existing = gbrainGet(gbrainExecutable, slug);
+  if (!existing.success || !existing.stdout.trim()) {
+    return { content: newContent, merged: false, message: 'no existing page, fresh create' };
+  }
+
+  const { body } = parseGbrainGetOutput(existing.stdout);
+  let existingJson: unknown;
+  try {
+    existingJson = JSON.parse(body);
+  } catch {
+    return { content: newContent, merged: false, message: 'existing page is not valid JSON, overwrite' };
+  }
+
+  if (!isRecord(existingJson) || !isRecord(newJson)) {
+    return { content: newContent, merged: false, message: 'not record type, skip merge' };
+  }
+
+  const existingData = existingJson as Record<string, unknown>;
+  const newData = newJson as Record<string, unknown>;
+
+  const existingScenarios = Array.isArray(existingData.scenarios) ? existingData.scenarios as Record<string, unknown>[] : [];
+  const newScenarios = Array.isArray(newData.scenarios) ? newData.scenarios as Record<string, unknown>[] : [];
+
+  const scenarioMap = new Map<string, Record<string, unknown>>();
+  for (const sc of existingScenarios) {
+    const sid = String(sc.scenario_id ?? '');
+    if (sid) scenarioMap.set(sid, sc);
+  }
+
+  for (const sc of newScenarios) {
+    const sid = String(sc.scenario_id ?? '');
+    if (!sid) continue;
+    const existing = scenarioMap.get(sid);
+    if (!existing) {
+      scenarioMap.set(sid, sc);
+      continue;
+    }
+
+    // Merge source_cases (union)
+    const existingCases = Array.isArray(existing.source_cases) ? existing.source_cases as string[] : [];
+    const newCases = Array.isArray(sc.source_cases) ? sc.source_cases as string[] : [];
+    const mergedCases = [...new Set([...existingCases, ...newCases])];
+    existing.source_cases = mergedCases;
+
+    // Merge steps (by step_index), preserve existing patches as history
+    const existingSteps = Array.isArray(existing.steps) ? existing.steps as Record<string, unknown>[] : [];
+    const newSteps = Array.isArray(sc.steps) ? sc.steps as Record<string, unknown>[] : [];
+    const stepMap = new Map<number, Record<string, unknown>>();
+    for (const st of existingSteps) {
+      const idx = Number(st.step_index ?? -1);
+      if (idx >= 0) stepMap.set(idx, st);
+    }
+    for (const st of newSteps) {
+      const idx = Number(st.step_index ?? -1);
+      if (idx < 0) continue;
+      const oldStep = stepMap.get(idx);
+      if (!oldStep) {
+        stepMap.set(idx, st);
+        continue;
+      }
+      // Append new patches to existing patches
+      const oldPatches = Array.isArray(oldStep.patches) ? oldStep.patches as unknown[] : [];
+      const newPatches = Array.isArray(st.patches) ? st.patches as unknown[] : [];
+      oldStep.patches = [...oldPatches, ...newPatches];
+      // Update match info and reconstruction from new data
+      if (st.match_kind) oldStep.match_kind = st.match_kind;
+      if (st.match_reason) oldStep.match_reason = st.match_reason;
+      if (st.reconstruction) oldStep.reconstruction = st.reconstruction;
+    }
+    existing.steps = Array.from(stepMap.values());
+
+    // Merge operation_variants (union)
+    const existingOVs = Array.isArray(existing.operation_variants) ? existing.operation_variants as unknown[] : [];
+    const newOVs = Array.isArray(sc.operation_variants) ? sc.operation_variants as unknown[] : [];
+    existing.operation_variants = [...existingOVs, ...newOVs];
+
+    // Merge parameter_variants (union)
+    const existingPVs = Array.isArray(existing.parameter_variants) ? existing.parameter_variants as unknown[] : [];
+    const newPVs = Array.isArray(sc.parameter_variants) ? sc.parameter_variants as unknown[] : [];
+    existing.parameter_variants = [...existingPVs, ...newPVs];
+
+    // Merge variable_dependencies (union)
+    const existingVDs = Array.isArray(existing.variable_dependencies) ? existing.variable_dependencies as unknown[] : [];
+    const newVDs = Array.isArray(sc.variable_dependencies) ? sc.variable_dependencies as unknown[] : [];
+    existing.variable_dependencies = [...existingVDs, ...newVDs];
+
+    // Merge unresolved_questions (union)
+    const existingUQs = Array.isArray(existing.unresolved_questions) ? existing.unresolved_questions as string[] : [];
+    const newUQs = Array.isArray(sc.unresolved_questions) ? sc.unresolved_questions as string[] : [];
+    existing.unresolved_questions = [...new Set([...existingUQs, ...newUQs])];
+
+    // Update hash
+    existing.hash = sha256(canonicalJson(existing));
+  }
+
+  const mergedScenarios = Array.from(scenarioMap.values());
+  newData.scenarios = mergedScenarios;
+  newData.generated_at = new Date().toISOString();
+
+  const mergedContent = JSON.stringify(newData, null, 2);
+  return { content: mergedContent, merged: true, message: `merged ${newScenarios.length} scenario(s) into existing ${existingScenarios.length} scenario(s)` };
+}
+
 // --- 页面操作 ---
 
 function normalizeBody(text: string): string {
@@ -226,12 +345,22 @@ function getPageBodyHash(slug: string): { exists: boolean; bodyHash: string | nu
   return { exists: true, bodyHash: sha256(normalizeBody(body)), rawText: result.stdout };
 }
 
-function applyPages(pages: ScenarioPlanPage[]): PageResult[] {
+function applyPages(pages: WritablePage[]): PageResult[] {
   const results: PageResult[] = [];
 
   for (const page of pages) {
-    const expectedHash = page.content_sha256 || sha256(page.content);
-    const expectedBodyHash = bodyHashOf(page.content);
+    // Safe extend for analysis-data pages
+    let writeContent = page.content;
+    if (page.merge_mode === 'extend' && page.slug.endsWith('/analysis-data')) {
+      const extendResult = safeExtendAnalysisData(page.slug, page.content);
+      writeContent = extendResult.content;
+      if (extendResult.merged) {
+        console.error(`  [EXTEND] ${page.slug}: ${extendResult.message}`);
+      }
+    }
+
+    const expectedHash = page.content_sha256 || sha256(writeContent);
+    const expectedBodyHash = bodyHashOf(writeContent);
     const existing = getPageBodyHash(page.slug);
 
     if (existing.exists && existing.bodyHash === expectedBodyHash) {
@@ -249,7 +378,7 @@ function applyPages(pages: ScenarioPlanPage[]): PageResult[] {
     }
 
     // 写入（put 全量覆盖；extend 模式的内容由 AI 在草稿阶段完成合并）
-    const putResult = gbrainPut(gbrainExecutable, page.slug, page.content);
+    const putResult = gbrainPut(gbrainExecutable, page.slug, writeContent);
     if (!putResult.success) {
       throw new Error(`页面写入失败 ${page.slug}: ${putResult.stderr || putResult.stdout}`);
     }
@@ -399,7 +528,7 @@ function applyLinks(links: ScenarioPlanLink[]): LinkResult[] {
 
 // --- 检索验证（warning 级） ---
 
-function verifyRetrieval(pages: ScenarioPlanPage[]): RetrievalVerificationResult[] {
+function verifyRetrieval(pages: WritablePage[]): RetrievalVerificationResult[] {
   const results: RetrievalVerificationResult[] = [];
   for (const page of pages) {
     const keyword = page.slug.split('/').pop() || page.slug;

@@ -741,3 +741,34 @@ analysis-data 中 SoapClient 组件的 rReq 参数 delta 完全缺失，导致�
 3. **新增 DataBaseQuery/DataBaseModify delta**：与 SoapClient 同理，对比 option_parameter 键级差异
 4. **新增通用组件 delta 兜底**：对未专门处理的组件类型（如 SaveUserInfo、AssertResult 等），自动进行 option_parameter 键级对比
 5. **提取通用函数 pushOptionParamDeltas**：SoapClient/DataBaseQuery/通用组件共用同一套键级对比逻辑，消除代码重复
+
+## v2.0.0 (2026-08-11) — 架构重构
+
+### 问题
+v0.13.x 系列虽修复了多个表层 bug，但底层架构存在系统性缺陷：
+1. **匹配过浅**：仅用叶名字段 + 名称 + 组件序列，无法区分 `AdjustmentInfo.AdjustmentAmt` 和 `FreeUnitAdjustmentInfo.AdjustmentAmt`
+2. **Delta 是整块对比**：rReq/rRsp 作为整体 JSON 字符串比较，无法回答"改了哪个字段"
+3. **变量依赖从 Delta 名字重叠猜测**：不是真实的生产-消费关系
+4. **analysis-data 丢失 AI 最有价值的分析**：仅保留 change_type/case_value/asset_default_value，丢弃 reason/evidence/field_path
+5. **未匹配步骤直接丢失**：无法重建
+6. **extend 全量覆盖**：不安全
+7. **nosend/nocare/norecv 语义丢失**：被当作普通字符串值
+8. **无证据溯源**：无法区分历史用例观察值 vs 接口文档定义 vs AI 推断
+9. **单用例直接标记为稳定知识**：无 maturity 概念
+
+### 修复方案
+完整的 v2.0 架构重构，涉及 7 个 TS 文件 + 6 个参考文档 + SKILL.md + PowerShell 脚本：
+
+1. **字段树模型**：递归展开 rReq/rRsp 为扁平路径 → 值映射，每个字段标注 is_variable_ref / is_special_value / is_expression
+2. **13 种补丁操作**：字段级（add/replace/remove/remove-override）、特殊值（nosend/nocare/norecv）、变量绑定（runtime/expression）、变量级（set/remove-variable）、结构级（replace-request/add/remove-component）、启发式（version-drift）
+3. **变量流图**：显式提取每个步骤的变量生产者（TableSetVar/SoapClient rVars/DataBaseQuery/ShellExecute/implicit）和消费者（rReq 字段引用/vars 消费），构建 producer→consumer 依赖链
+4. **多维匹配**：interface_template + component_structure + request_structure（完整字段路径对比）+ request_values + response_structure + variable_behavior，带分数分解
+5. **重建引擎**：applyPatches 将补丁应用到资产 JSON，compareReconstructed 与原始步骤规范化后深度比较，输出覆盖率和未解释差异
+6. **construction_mode**：asset-plus-patches / inline-recipe / external-source / manual-required，每个步骤独立判定
+7. **inline_recipe**：未匹配步骤保存完整组件配置（option_parameter + variable_inputs + variable_outputs）
+8. **证据模型**：declared / observed / documented / inferred，每个补丁和变量依赖都标注证据来源
+9. **maturity**：provisional（单用例）/ stable（多用例验证后升级）
+10. **安全 extend**：写入前回读现有 analysis-data，合并 source_cases（并集）、steps（按 step_index 追加 patches）、保留已有 evidence，冲突生成 unresolved_questions
+11. **fetch-asset-by-id 强制步骤**：AI 必须读取完整候选资产 JSON 后才能裁决匹配
+12. **重建门禁（V18）**：reconstruction.status 为 conflict 时报 error
+13. **批量 manifest**：fetch-asset-by-id 输出 asset-manifest.json（含 content_hash、缓存状态）

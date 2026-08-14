@@ -31,11 +31,18 @@ import {
   asArray,
   asNullableString,
   asString,
+  buildFieldTree,
+  buildVariableGraph,
   canonicalJson,
-  computeStepDelta,
+  computeFieldPatches,
+  deepClone,
+  extractVariableName,
   gbrainGet,
   gbrainList,
+  isExpression,
   isRecord,
+  isSpecialValue,
+  isVariableRef,
   matchStepToAssets,
   normalizeTemplateName,
   parseGbrainGetOutput,
@@ -47,13 +54,15 @@ import {
   type CaseComponent,
   type CaseDataFile,
   type CaseStep,
+  type FieldTreeEntry,
   type InterfaceFieldsFile,
   type JsonRecord,
   type ParsedCase,
-  type ScriptDeltaItem,
+  type ScriptPatchItem,
   type StepAssetJson,
   type StepFingerprint,
   type StepMatchResult,
+  type VariableGraph,
 } from './scenario-core.ts';
 import { fetchAssetsByApiAsync } from './fetch-asset-by-id.ts';
 
@@ -214,7 +223,14 @@ function generateStepFingerprint(step: CaseStep): StepFingerprint {
 
     if (comp.aw_alias === 'TableSetVar') {
       const parsed = parseVarsString(asString(comp.option_parameter.vars));
-      for (const name of Object.keys(parsed)) variableNames.push(name);
+      for (const [name, value] of Object.entries(parsed)) {
+        variableNames.push(name);
+        if (value && isVariableRef(value)) {
+          fieldToVar[`vars.${name}`] = extractVariableName(value) ?? value;
+        } else if (value) {
+          fieldToLiteral[`vars.${name}`] = value;
+        }
+      }
     }
 
     if (comp.aw_alias === 'SoapClient') {
@@ -222,19 +238,45 @@ function generateStepFingerprint(step: CaseStep): StepFingerprint {
       if (rTpl) {
         interfaceTemplate = normalizeTemplateName(rTpl);
       }
-      // rReq 可能是 JSON 对象或字符串，递归提取字段路径和变量引用
+      // rReq: build full field tree with dot-notation paths
       const rReqRaw = comp.option_parameter.rReq;
       if (rReqRaw != null) {
-        const rReqStr = typeof rReqRaw === 'string' ? rReqRaw : JSON.stringify(rReqRaw);
-        if (rReqStr && rReqStr !== '{}' && rReqStr !== '""') {
-          // 从 JSON 键名提取 SOAP 字段路径
-          for (const m of rReqStr.matchAll(/"([A-Za-z_][\w]*)"\s*:/g)) {
-            if (!soapFieldPaths.includes(m[1])) soapFieldPaths.push(m[1]);
+        const rReqObj = typeof rReqRaw === 'string' ? (() => { try { return JSON.parse(rReqRaw); } catch { return null; } })() : rReqRaw;
+        if (rReqObj && typeof rReqObj === 'object') {
+          const tree = buildFieldTree(rReqObj);
+          for (const [path, val] of tree) {
+            if (!soapFieldPaths.includes(path)) soapFieldPaths.push(path);
+            if (isVariableRef(val)) {
+              fieldToVar[`rReq.${path}`] = extractVariableName(val) ?? val;
+              const varName = extractVariableName(val);
+              if (varName && !variableNames.includes(varName)) variableNames.push(varName);
+            } else if (val) {
+              fieldToLiteral[`rReq.${path}`] = val;
+            }
           }
-          // 从 ${...} 提取变量引用
-          for (const m of rReqStr.matchAll(/\$\{([^}]+)\}/g)) {
-            if (!variableNames.includes(m[1])) variableNames.push(m[1]);
+        }
+      }
+      // rRsp: extract field paths for fingerprint matching
+      const rRspRaw = comp.option_parameter.rRsp;
+      if (rRspRaw != null) {
+        const rRspObj = typeof rRspRaw === 'string' ? (() => { try { return JSON.parse(rRspRaw); } catch { return null; } })() : rRspRaw;
+        if (rRspObj && typeof rRspObj === 'object') {
+          const tree = buildFieldTree(rRspObj);
+          for (const [path, val] of tree) {
+            if (!soapFieldPaths.includes(path)) soapFieldPaths.push(path);
+            if (isVariableRef(val)) {
+              fieldToVar[`rRsp.${path}`] = extractVariableName(val) ?? val;
+              const varName = extractVariableName(val);
+              if (varName && !variableNames.includes(varName)) variableNames.push(varName);
+            }
           }
+        }
+      }
+      // rVars: extract variable references
+      const rVarsStr = asString(comp.option_parameter.rVars);
+      if (rVarsStr) {
+        for (const m of rVarsStr.matchAll(/\$\{([^}]+)\}/g)) {
+          if (!variableNames.includes(m[1])) variableNames.push(m[1]);
         }
       }
     }
@@ -242,7 +284,6 @@ function generateStepFingerprint(step: CaseStep): StepFingerprint {
     if (comp.aw_alias === 'DataBaseQuery' || comp.aw_alias === 'DataBaseModify') {
       const tableName = asString(comp.option_parameter.tableName);
       if (tableName) interfaceEndpoint = tableName;
-      // 提取 vars 输出变量（格式："RESULT_COL|AliasName" → AliasName 加入 variable_names）
       const varsStr = asString(comp.option_parameter.vars);
       if (varsStr) {
         for (const part of varsStr.split(';')) {
@@ -251,6 +292,41 @@ function generateStepFingerprint(step: CaseStep): StepFingerprint {
             const alias = part.slice(pipeIdx + 1).trim();
             if (alias && !variableNames.includes(alias)) variableNames.push(alias);
           }
+        }
+      }
+      // Extract variable references from sql
+      const sql = asString(comp.option_parameter.sql);
+      if (sql) {
+        for (const m of sql.matchAll(/\$\{([^}]+)\}/g)) {
+          if (!variableNames.includes(m[1])) variableNames.push(m[1]);
+          fieldToVar[`sql`] = m[1];
+        }
+      }
+    }
+
+    if (comp.aw_alias === 'ShellExecute') {
+      const cmd = asString(comp.option_parameter.cmd);
+      if (cmd) {
+        for (const m of cmd.matchAll(/\$\{([^}]+)\}/g)) {
+          if (!variableNames.includes(m[1])) variableNames.push(m[1]);
+        }
+      }
+      const shellChecks = comp.option_parameter.shellChecks;
+      if (Array.isArray(shellChecks)) {
+        for (const check of shellChecks) {
+          const checkStr = JSON.stringify(check);
+          for (const m of checkStr.matchAll(/\$\{([^}]+)\}/g)) {
+            if (!variableNames.includes(m[1])) variableNames.push(m[1]);
+          }
+        }
+      }
+    }
+
+    // Generic: scan all option_parameter string values for ${...} references
+    for (const [key, val] of Object.entries(comp.option_parameter)) {
+      if (typeof val === 'string') {
+        for (const m of val.matchAll(/\$\{([^}]+)\}/g)) {
+          if (!variableNames.includes(m[1])) variableNames.push(m[1]);
         }
       }
     }
@@ -684,7 +760,7 @@ async function main(): Promise<void> {
       },
       steps: c.steps.map((s) => {
         const fingerprint = generateStepFingerprint(s);
-        // 脚本化指纹匹配
+        // Multi-dimensional matching with score breakdown
         const match: StepMatchResult = matchStepToAssets(
           s.case_step,
           fingerprint.component_sequence,
@@ -694,12 +770,45 @@ async function main(): Promise<void> {
           assetLoad.assetSlugs,
         );
         match.step_index = s.step_index;
-        // 脚本化 delta（仅 matched/tentative 时计算）
-        let scriptDeltas: ScriptDeltaItem[] = [];
+
+        // Field-level patch computation (replaces old block-level delta)
+        let scriptPatches: ScriptPatchItem[] = [];
         if (match.matched_asset_id) {
           const asset = assets.find((a) => a.asset_id === match.matched_asset_id);
-          if (asset) scriptDeltas = computeStepDelta(s, asset);
+          if (asset) scriptPatches = computeFieldPatches(s, asset);
         }
+
+        // Build field trees for each component
+        const fieldTrees: Record<string, FieldTreeEntry[]> = {};
+        for (const comp of s.components) {
+          const entries: FieldTreeEntry[] = [];
+          for (const [key, val] of Object.entries(comp.option_parameter)) {
+            if (val != null && typeof val === 'object' && !Array.isArray(val)) {
+              const tree = buildFieldTree(val);
+              for (const [path, strVal] of tree) {
+                entries.push({
+                  path: `${key}.${path}`,
+                  value: strVal,
+                  is_variable_ref: isVariableRef(strVal),
+                  variable_name: extractVariableName(strVal),
+                  is_special_value: isSpecialValue(strVal),
+                  is_expression: isExpression(strVal),
+                });
+              }
+            } else if (typeof val === 'string') {
+              entries.push({
+                path: key,
+                value: val,
+                is_variable_ref: isVariableRef(val),
+                variable_name: extractVariableName(val),
+                is_special_value: isSpecialValue(val),
+                is_expression: isExpression(val),
+              });
+            }
+          }
+          fieldTrees[comp.aw_alias] = entries;
+        }
+
         return {
           step_index: s.step_index,
           step_name: s.case_step,
@@ -713,7 +822,10 @@ async function main(): Promise<void> {
           })),
           fingerprint,
           match,
-          script_deltas: scriptDeltas,
+          script_patches: scriptPatches,
+          field_trees: fieldTrees,
+          variable_inputs: [],
+          variable_outputs: [],
         };
       }),
       source_file: c.source_file,
@@ -732,7 +844,9 @@ async function main(): Promise<void> {
       parameter_meta: a.parameter_meta,
       source_kind: a.source_kind,
       source_path: a.source_path,
+      full_json: deepClone(a) as JsonRecord,
     })),
+    variable_graph: { nodes: [], dependencies: [], unresolved_variables: [] } as VariableGraph,
     interface_catalog: Object.entries(interfaceFields).map(([name, data]) => ({
       interface: name,
       element_count: data.elements.length,
@@ -758,21 +872,21 @@ async function main(): Promise<void> {
   writeFileSync(outputDirFile, outDirPath, 'utf8');
 
   const matchedCount = caseData.cases.reduce(
-    (sum, c) => sum + c.steps.filter((s) => s.match.match_status !== 'unmatched').length,
+    (sum, c) => sum + c.steps.filter((s) => s.match.match_status !== 'none').length,
     0,
   );
   const totalSteps = caseData.cases.reduce((sum, c) => sum + c.steps.length, 0);
-  const deltaCount = caseData.cases.reduce((sum, c) => sum + c.steps.reduce((s2, st) => s2 + st.script_deltas.length, 0), 0);
+  const patchCount = caseData.cases.reduce((sum, c) => sum + c.steps.reduce((s2, st) => s2 + st.script_patches.length, 0), 0);
 
   console.error('');
   console.error('=== extraction complete ===');
   console.error(`  cases: ${caseData.cases.length}`);
   console.error(`  total steps: ${totalSteps}`);
-  console.error(`  script-matched steps: ${matchedCount}/${totalSteps}`);
-  console.error(`  script deltas: ${deltaCount}`);
+  console.error(`  matched steps: ${matchedCount}/${totalSteps}`);
+  console.error(`  script patches: ${patchCount}`);
   console.error(`  step assets: ${caseData.step_assets.length} (source: ${assetLoad.source})`);
   console.error(`  existing scenarios: ${existingScenarios.length}`);
-  console.error(`  interface catalog: ${caseData.interface_catalog.length} interfaces (明细在 interface-fields.json，用 lookup-field-info.ts 按需查询)`);
+  console.error(`  interface catalog: ${caseData.interface_catalog.length} interfaces`);
   console.error(`  output: ${outPath}`);
   if (assets.length === 0) {
     console.error('');

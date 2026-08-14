@@ -19,9 +19,9 @@
  *   --out-dir 指定时同时把每个资产写入 <out-dir>/<asset_name>.json
  */
 
-import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { asArray, asString, isRecord, type JsonRecord } from './scenario-core.ts';
+import { asArray, asString, isRecord, sha256, type AssetFetchManifest, type AssetManifestEntry, type JsonRecord } from './scenario-core.ts';
 
 export interface FetchAssetsOptions {
   apiUrl: string;
@@ -145,31 +145,109 @@ async function mainCli(): Promise<void> {
   const token = await loginForToken(apiUrl, username, password, 30000);
   const assets: Record<string, JsonRecord> = {};
   const saved: string[] = [];
+  const manifestEntries: AssetManifestEntry[] = [];
+  let cached = 0;
+  let fetched = 0;
+  let failed = 0;
 
   for (const assetId of assetIds) {
-    const item = await exportStepById(apiUrl, token, assetId, 30000);
-    if (!item) continue;
-    assets[assetId] = item;
+    let item: JsonRecord | null = null;
+    let localPath: string | null = null;
+    let contentHash: string | null = null;
+    let fromCache = false;
+
+    // Hash-based caching: check if local file exists
     if (outDir) {
       const dir = resolve(outDir);
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      const step = isRecord(item.step) ? item.step : item;
-      const name = asString(step.name) || assetId;
-      const safeName = name.replace(/[\\/:*?"<>|]/g, '_');
-      const filePath = join(dir, `${safeName}.json`);
-      writeFileSync(filePath, JSON.stringify(item, null, 2), 'utf8');
-      saved.push(filePath);
+      // Try to find existing file by asset_id pattern
+      const possiblePath = join(dir, `asset-${assetId}.json`);
+      if (existsSync(possiblePath)) {
+        try {
+          const cachedContent = readFileSync(possiblePath, 'utf8');
+          const cachedJson = JSON.parse(cachedContent) as JsonRecord;
+          // Verify it's the same asset by checking id
+          const step = isRecord(cachedJson.step) ? cachedJson.step : cachedJson;
+          if (String(step.id ?? '') === assetId) {
+            item = cachedJson;
+            localPath = possiblePath;
+            contentHash = sha256(cachedContent);
+            fromCache = true;
+            cached++;
+          }
+        } catch { /* cache miss, fetch from API */ }
+      }
     }
+
+    // Fetch from API if not cached
+    if (!item) {
+      item = await exportStepById(apiUrl, token, assetId, 30000);
+      if (item) {
+        fetched++;
+        if (outDir) {
+          const dir = resolve(outDir);
+          if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+          const content = JSON.stringify(item, null, 2);
+          contentHash = sha256(content);
+          const filePath = join(dir, `asset-${assetId}.json`);
+          writeFileSync(filePath, content, 'utf8');
+          localPath = filePath;
+          saved.push(filePath);
+
+          // Also save by name for human readability
+          const step = isRecord(item.step) ? item.step : item;
+          const name = asString(step.name) || assetId;
+          const safeName = name.replace(/[\\/:*?"<>|]/g, '_');
+          const namePath = join(dir, `${safeName}.json`);
+          writeFileSync(namePath, content, 'utf8');
+        }
+      } else {
+        failed++;
+      }
+    }
+
+    if (item) {
+      assets[assetId] = item;
+    }
+
+    const step = item && (isRecord(item.step) ? item.step : item);
+    manifestEntries.push({
+      asset_id: assetId,
+      asset_name: step ? asString(step.name) : assetId,
+      slug: null,
+      local_path: localPath,
+      content_hash: contentHash,
+      fetched: !fromCache,
+      fetch_error: item ? null : 'API returned null or 404',
+    });
+  }
+
+  // Generate manifest
+  const manifest: AssetFetchManifest = {
+    generated_at: new Date().toISOString(),
+    api_url: apiUrl,
+    total_assets: assetIds.length,
+    fetched,
+    cached,
+    failed,
+    entries: manifestEntries,
+  };
+
+  if (outDir) {
+    const manifestPath = join(resolve(outDir), 'asset-manifest.json');
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
   }
 
   const missing = assetIds.filter((id) => !assets[id]);
   console.log(
     JSON.stringify({
       status: missing.length === 0 ? 'success' : 'partial',
-      fetched: Object.keys(assets).length,
+      fetched,
+      cached,
+      failed,
       missing,
       assets,
       saved,
+      manifest,
     }, null, 2),
   );
 }

@@ -1,52 +1,47 @@
-# AI 分析草稿 Schema
+# AI 分析草稿 Schema (v2.0)
 
 ## 目录
 
 - [概览](#概览)
 - [AnalysisDraft 顶层结构](#analysisdraft-顶层结构)
 - [AnalysisDraftScenario 场景结构](#analysisdraftscenario-场景结构)
-- [AnalysisDraftStep 步骤结构](#analysisdraftstep-步骤结构)
-- [ParamDeltaItem 参数 Delta](#paramdeltaitem-参数-delta)
-- [ParamDependency 参数依赖](#paramdependency-参数依赖)
-- [ScenarioKnowledge 场景知识](#scenarioknowledge-场景知识)
-- [merge_mode 与场景判重](#merge_mode-与场景判重)
+- [FieldPatch 字段补丁](#fieldpatch-字段补丁)
+- [ScriptPatchItem 脚本补丁](#scriptpatchitem-脚本补丁)
+- [VariableDependency 变量依赖](#variabledependency-变量依赖)
+- [InlineRecipe 内联配方](#inlinerecipe-内联配方)
+- [ReconstructionResult 重建结果](#reconstructionresult-重建结果)
+- [construction_mode 判定规则](#construction_mode-判定规则)
+- [补丁 operation 类型](#补丁-operation-类型)
 - [AI 分析任务清单](#ai-分析任务清单)
-- [校验规则](#校验规则)
 - [完整示例](#完整示例)
 
 ## 概览
 
-AI 分析草稿（`analysis-draft.json`）是 AI 读取 `case-data.json` 后按本 Schema 生成的结构化分析结果，是 AI 与校验脚本之间的契约。
+AI 分析草稿（`analysis-draft.json`）是 init-analysis-draft.ts 生成的骨架，AI 读取后填充语义字段。脚本做确定性工作（字段树、补丁 diff、变量图、匹配），AI 做语义工作（匹配裁决、补丁增强、意图提取、实体识别）。
 
-**职责分工**（脚本做确定性工作，AI 做语义工作）：
+### 职责分工
 
 | 工作 | 执行者 |
 |------|--------|
 | 用例/接口文档/资产 JSON 解析 | 脚本（extract-case-data.ts） |
-| 步骤指纹匹配（名称+组件序列+接口模板） | 脚本，输出 `match` 结果与置信度 |
-| 参数 Delta 计算（变量级 add/remove/modify） | 脚本，输出 `script_deltas` |
-| 匹配结论确认/修正（tentative 需 AI 裁决） | AI，不得推翻脚本 matched ≥0.75 的结论 |
-| Delta 业务理由（为什么设置这个值） | AI，基于接口文档字段含义 |
-| 场景归属判定（merge_mode + scenario_signature） | AI，基于已有场景列表判重 |
-| 场景知识提炼（knowledge 四要素） | AI |
-| 步骤间数据流分析 | AI |
-| 页面草稿撰写（独立 md 文件） | AI |
-
-核心原则：
-
-- AI 基于用例**实际脚本参数**分析，用例名称/描述仅作参考线索（测试人员可能批量复制）
-- AI 必须结合接口文档字段含义理解参数业务语义
-- **脚本 delta 全覆盖**：脚本计算的每条 `script_deltas` 必须在 AI 的 `param_deltas` 中出现并附业务理由
-- 页面草稿放在**独立 md 文件**（`page_draft_file` 引用），不内嵌 JSON（避免转义问题）
+| 字段树提取（递归展开 rReq/rRsp） | 脚本 |
+| 脚本补丁计算（字段级 diff） | 脚本，输出 `script_patches` |
+| 变量流图构建（producer/consumer） | 脚本，输出 `variable_graph` |
+| 多维匹配评分 | 脚本，输出 `score_breakdown` |
+| 匹配裁决（读取完整资产 JSON 后确认/否决） | AI |
+| 补丁增强（reason/evidence/confidence） | AI |
+| intent_signature / scenario_name / test_points | AI |
+| construction_mode 判定 | 脚本初判，AI 可修正 |
+| 重建验证 | 脚本（validate-analysis.ts） |
 
 ## AnalysisDraft 顶层结构
 
 ```json
 {
-  "schema_version": "cbs-scenario-analysis-v1",
-  "analyzed_at": "2026-08-06T00:00:00.000Z",
+  "version": "2.0.0",
+  "generated_at": "2026-08-11T10:00:00Z",
   "source_case_data": "case-data.json",
-  "scenarios": [AnalysisDraftScenario, ...]
+  "scenarios": [AnalysisDraftScenario]
 }
 ```
 
@@ -54,199 +49,261 @@ AI 分析草稿（`analysis-draft.json`）是 AI 读取 `case-data.json` 后按�
 
 ```json
 {
-  "scenario_id": "SCN-FREEUNIT-EXPIRE",
-  "name": "免费资源调账失效场景",
-  "slug_en": "freeunit-expire-reset",
-  "description": "客户存在未失效免费资源时，通过 Adjustment 接口 OpType=5 设置失效时间使其到期失效",
-  "site_key": "cbs-ac3e294d",
-  "site_id": "ac3e294d-35dc-49f2-bfe6-42a19055600f",
-  "site_name": "CBS基线",
-  "product_slug": "cbs/products/cbs",
+  "scenario_id": "freeunit-expiretime-reset",
+  "scenario_name": "<AI填写：中文名称>",
+  "capability": "余额和免费资源调账",
+  "pattern_signature": "Adjustment",
+  "intent_signature": "<AI填写>",
+  "variant_signature": "OpType=5",
+  "parameter_signature": "FreeUnitType|ExpireTime",
+  "maturity": "provisional",
   "source_cases": ["US-20251120114137-1460730951_4444720"],
-  "merge_mode": "create",
-  "target_scenario_slug": null,
-  "scenario_signature": "Adjustment[OpType=5,FreeUnitAdjustmentInfo]",
+  "preparation_operations": ["OpType=1"],
+  "operation_variants": [
+    {
+      "step_index": 3,
+      "interface_template": "Adjustment",
+      "op_type": "OpType=5",
+      "role": "core",
+      "construction_mode": "asset-plus-patches",
+      "matched_asset_id": "10160",
+      "matched_asset_slug": "cbs/test-steps/余额和免费资源调账",
+      "match_kind": "semantic",
+      "match_reason": "<AI填写>",
+      "inline_recipe": null
+    }
+  ],
+  "parameter_variants": [
+    {
+      "component": "SoapClient",
+      "field_path": "AdjustmentRequestMsg.AdjustmentRequest.OpType",
+      "operation": "replace-field",
+      "asset_value": "1",
+      "case_value": "5",
+      "source_case": "US-20251120...",
+      "confidence": "confirmed"
+    }
+  ],
   "test_points": [
     {
-      "test_point": "免费资源到达设定失效时间后失效",
-      "related_parameters": ["My_ExpirationTime", "OpType"],
-      "design_reason": "验证 OpType=5 设置的失效时间生效后免费资源实例状态变更"
+      "description": "<AI填写>",
+      "verification_method": "<AI填写>",
+      "expected_result": "<AI填写>"
     }
   ],
-  "steps": [AnalysisDraftStep, ...],
-  "dependencies": [ParamDependency, ...],
-  "missing_step_suggestions": [...],
-  "variant_suggestions": [...],
-  "scenario_knowledge": { ScenarioKnowledge },
-  "similar_existing_scenarios": [
-    {"slug": "cbs/scenarios/.../adjust-general", "title": "通用调账", "similarity_reason": "主接口相同但 OpType 不同，业务目的不同"}
-  ],
-  "page_draft_file": "page-SCN-FREEUNIT-EXPIRE.md"
-}
-```
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| scenario_id | string | 是 | 场景标识（建议 `SCN-<英文缩写>`），analysis-notes.md 中必须出现 |
-| name | string | 是 | 场景名（≥4 字符），基于实际行为命名 |
-| slug_en | string | 是 | 语义化英文 kebab-case slug（4-48 字符），禁止占位值；最终页面 slug 为 `cbs/scenarios/{site_key}/{slug_en}`，页面 frontmatter slug 必须与其一致；命名规范见 scenario-schema.md「slug_en 命名规范」 |
-| description | string | 是 | ≥10 字符，业务目的+典型流程 |
-| site_key / site_id / site_name | string | 是 | 从 case-data 的 basic_info 获取 |
-| product_slug | string | 是 | 产品 slug |
-| source_cases | string[] | 是 | 用例 ID 列表，必须在 case-data 中存在；<2 触发 notability warning |
-| merge_mode | string | 是 | `create` / `extend` |
-| target_scenario_slug | string\|null | extend 必填 | extend 时目标已有场景页 slug，必须在 `existing_scenarios` 中 |
-| scenario_signature | string | 是 | 场景签名，见下文格式 |
-| test_points | array | 建议 | 测试点+关联参数+设计理由（空则 warning） |
-| steps | AnalysisDraftStep[] | 是 | 步骤列表 |
-| dependencies | ParamDependency[] | 是 | 可为空数组；引用的 step_index 必须存在 |
-| missing_step_suggestions | array | 是 | 可为空数组 |
-| variant_suggestions | array | 是 | 可为空数组 |
-| scenario_knowledge | object | 是 | 见下文 |
-| similar_existing_scenarios | array | 否 | 判重说明；GBrain 已有场景但本字段为空时 warning |
-| page_draft_file | string | 是 | 页面草稿 md 文件路径（相对草稿文件目录或绝对路径） |
-
-## AnalysisDraftStep 步骤结构
-
-```json
-{
-  "step_index": 1,
-  "behavior": "创建客户",
-  "matched_step_asset_slug": "cbs/steps/cbs-ac3e294d/create-customer",
-  "matched_asset_id": "88c5af8f-14d1-4f51-8370-cbfebf101735",
-  "match_confidence": 0.95,
-  "match_reason": "脚本指纹匹配：步骤名称+组件序列+接口模板三重一致",
-  "source_case_refs": [{"case_id": "US-...", "step_index": 1}],
-  "param_deltas": [ParamDeltaItem, ...]
-}
-```
-
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| step_index | 是 | 与 case-data 中步骤的 step_index 对应 |
-| behavior | 是 | 步骤行为描述 |
-| matched_asset_id | 条件 | 匹配资产的 UUID；脚本 matched≥0.75 时不得为空 |
-| matched_step_asset_slug | 可空 | 资产 GBrain 页 slug（case-data 的 match.matched_slug） |
-| match_confidence | 是 | 采纳脚本值或 AI 修正值 |
-| match_reason | 是 | 脚本 unmatched 但 AI 匹配时，必须 ≥10 字符充分说明 |
-| source_case_refs | 是 | 来源用例步骤引用 |
-| param_deltas | 是 | 见下文；可为空数组 |
-
-## ParamDeltaItem 参数 Delta
-
-**脚本已算好 delta 清单（case-data 的 `script_deltas`），AI 的职责是全覆盖并补业务理由：**
-
-```json
-{
-  "step_index": 1,
-  "change_type": "modify-default",
-  "component_alias": "TableSetVar",
-  "variable_name": "My_InitBalance",
-  "field_path": "CreateCustomerRequest.Body.InitBalance",
-  "field_description": "账户初始余额（Long，单位：货币精度最小单位）",
-  "case_value": "0",
-  "asset_default_value": "${My_InitBalance}",
-  "reason": "后付费场景初始余额为 0，因为后付费用户先使用后付费，开户时无需预存"
-}
-```
-
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| step_index | 是 | 所属步骤 |
-| change_type | 是 | `add` / `remove` / `modify-default` / `modify-binding` |
-| component_alias | 是 | 与 script_deltas 的 component_alias 一致（覆盖校验键） |
-| variable_name | 是 | 与 script_deltas 的 variable_name 一致（覆盖校验键） |
-| field_path | 建议 | 接口字段路径（从接口文档查得） |
-| field_description | 建议 | 字段含义，含数据类型（String/Long/List 等）；缺失类型触发 warning |
-| case_value | 是 | 场景实际值 |
-| asset_default_value | 可空 | 资产默认值（占位符） |
-| reason | 是 | 业务理由：解释**为什么设置这个值**；<15 字符或缺业务词触发 warning |
-
-## ParamDependency 参数依赖
-
-```json
-{
-  "from_step": 1,
-  "to_step": 2,
-  "from_param": "My_CustomerId",
-  "to_param": "My_AcctId",
-  "type": "variable-reference",
-  "description": "创建客户输出的客户 ID 用于调账步骤的账户定位"
-}
-```
-
-`type` 枚举：`variable-reference` / `env-var-passing` / `query-output`。
-
-## ScenarioKnowledge 场景知识
-
-**必填**。从历史用例+接口文档提炼的知识，让生成 AI 理解"为什么"：
-
-```json
-{
-  "core_business_knowledge": "Adjustment 接口 OpType=5 用于设置免费资源失效时间，需前置系统参数 ar.adjust.modifyEffdate.supportType=Y，否则报错 503605064",
-  "parameter_design_rationale": [
+  "business_entities": [
     {
-      "parameter": "OpType",
-      "field_path": "AdjustmentRequest.Body.OpType",
-      "case_value": "5",
-      "field_meaning": "调账操作类型（String）",
-      "why_this_value": "5 表示设置免费资源失效时间",
-      "business_context": "免费资源失效场景的核心操作标识"
+      "entity": "FreeUnitInstance",
+      "relation": "operated-on",
+      "created_by": "CreateCustomer",
+      "modified_by": "Adjustment(OpType=5)",
+      "evidence_type": "observed"
     }
   ],
-  "preconditions": ["系统参数已开启", "客户已创建且存在未失效免费资源"],
-  "expected_results": ["到达失效时间后免费资源失效", "ChgAmt=0"],
-  "key_decision_points": [
+  "variable_dependencies": [
     {
-      "parameter": "OpType",
-      "field_path": "AdjustmentRequest.Body.OpType",
-      "decision_impact": "决定调账操作的业务语义",
-      "alternative_values": [{"value": "1", "meaning": "余额调增"}, {"value": "5", "meaning": "免费资源失效"}]
+      "from_step": 0,
+      "to_step": 3,
+      "variable": "My_AcctKey",
+      "producer_type": "soap-rvars",
+      "consumer_location": "AdjustmentRequestMsg.AdjustmentRequest.AcctKey",
+      "evidence": "Step[0] rVars.My_AcctKey -> Step[3] rReq.AcctKey",
+      "confidence": "confirmed"
+    }
+  ],
+  "steps": [
+    {
+      "step_index": 3,
+      "step_name": "调整免费资源失效时间",
+      "construction_mode": "asset-plus-patches",
+      "matched_asset_id": "10160",
+      "matched_asset_slug": "cbs/test-steps/余额和免费资源调账",
+      "match_kind": "semantic",
+      "match_reason": "<AI填写>",
+      "patches": [FieldPatch],
+      "inline_recipe": null,
+      "reconstruction": null,
+      "variable_inputs": ["My_AcctKey", "My_FUCode"],
+      "variable_outputs": ["My_AdjResult"]
+    }
+  ],
+  "unresolved_questions": ["<AI填写：不确定的分析结论>"]
+}
+```
+
+## FieldPatch 字段补丁
+
+```json
+{
+  "step_index": 3,
+  "component": "SoapClient",
+  "field_path": "AdjustmentRequestMsg.AdjustmentRequest.FreeUnitAdjustmentInfo.ExpireTime",
+  "field_name": "ExpireTime",
+  "operation": "replace-field",
+  "asset_value": "20991231235959",
+  "case_value": "${My_NewExpireTime}",
+  "effective_runtime_value": "${My_NewExpireTime}",
+  "field_description": "<AI填写：字段含义>",
+  "reason": "<AI填写：≥5字符>",
+  "evidence_sources": ["observed", "documented"],
+  "confidence": "confirmed",
+  "required_for_execution": true,
+  "unresolved_question": null
+}
+```
+
+### 字段填写规则
+
+| 字段 | 填写者 | 要求 |
+|------|--------|------|
+| step_index/component/field_path/field_name/operation/asset_value/case_value | 脚本 | 自动填充 |
+| effective_runtime_value | 脚本 | 自动填充（特殊值解析后的运行时实际值） |
+| field_description | AI | 字段含义描述 |
+| reason | AI | ≥5字符，解释为什么设置这个值 |
+| evidence_sources | AI | 至少1项：declared/observed/documented/inferred |
+| confidence | AI | confirmed/inferred/unresolved |
+| required_for_execution | AI | true=生成用例时必须应用此补丁 |
+| unresolved_question | AI | confidence=unresolved 时必须填写 |
+
+## ScriptPatchItem 脚本补丁
+
+脚本自动计算的补丁，不含 AI 字段。AI 必须为每个 ScriptPatchItem 提供对应的 FieldPatch。
+
+```json
+{
+  "step_index": 3,
+  "component": "SoapClient",
+  "field_path": "AdjustmentRequestMsg.AdjustmentRequest.OpType",
+  "field_name": "OpType",
+  "operation": "replace-field",
+  "asset_value": "1",
+  "case_value": "5",
+  "effective_runtime_value": "5",
+  "auto_detected": true,
+  "unresolved_question": null
+}
+```
+
+## VariableDependency 变量依赖
+
+```json
+{
+  "from_step": 0,
+  "to_step": 3,
+  "variable": "My_AcctKey",
+  "producer_type": "soap-rvars",
+  "consumer_location": "AdjustmentRequestMsg.AdjustmentRequest.AcctKey",
+  "evidence": "Step[0] SoapClient.rVars.My_AcctKey -> Step[3] SoapClient.rReq.AcctKey",
+  "confidence": "confirmed"
+}
+```
+
+### producer_type 取值
+
+| 类型 | 说明 | 检测方式 |
+|------|------|---------|
+| table-set-var | TableSetVar 组件赋值 | vars 字段 |
+| soap-rvars | SoapClient 响应变量 | rVars 字段 |
+| db-query-output | 数据库查询输出 | DataBaseQuery.vars |
+| shell-execute | Shell 命令输出 | shellChecks |
+| implicit-component | 组件隐式输出 | 未知组件标记为 unresolved |
+| external-input | 外部输入 | 不在任何步骤中生产 |
+| unresolved | 无法确定 | 兜底 |
+
+## InlineRecipe 内联配方
+
+未匹配步骤的完整配置保存：
+
+```json
+{
+  "components": [
+    {
+      "aw_alias": "DataBaseQuery",
+      "option_parameter": {
+        "sql": "SELECT * FROM FREE_UNIT WHERE ACCT_KEY = '${My_AcctKey}'",
+        "tableName": "FREE_UNIT",
+        "connection": "CBS_DB"
+      }
+    }
+  ],
+  "variable_inputs": ["My_AcctKey"],
+  "variable_outputs": ["My_FUCode", "My_FUBalance"],
+  "description": "<AI填写：步骤用途>"
+}
+```
+
+## ReconstructionResult 重建结果
+
+validate-analysis.ts 自动生成，AI 无需填写：
+
+```json
+{
+  "status": "semantic-equivalent",
+  "key_field_coverage": 0.95,
+  "total_field_coverage": 0.88,
+  "unexplained_differences": [
+    {
+      "field_path": "AdjustmentRequestMsg.AdjustmentRequest.AdjustmentInfo._text",
+      "reconstructed_value": "nocare",
+      "original_value": "nocare",
+      "possible_reason": "value matched after normalization"
     }
   ]
 }
 ```
 
-| 子字段 | 必填 | 校验 |
-|--------|------|------|
-| core_business_knowledge | 是 | ≥20 字符（error） |
-| parameter_design_rationale | 是 | 非空数组；每项含 parameter/field_meaning/why_this_value（error） |
-| preconditions | 是 | 非空数组（error） |
-| expected_results | 是 | 非空数组（error） |
-| key_decision_points | 建议 | 关键参数的取值决策说明 |
+### status 取值
 
-## merge_mode 与场景判重
+| 状态 | 说明 |
+|------|------|
+| exact | 重建结果与原始完全一致 |
+| semantic-equivalent | 规范化后一致（key 排序、字符串编码差异） |
+| unexplained-difference | 存在未解释的字段差异 |
+| conflict | 关键字段冲突 |
+| not-applicable | inline-recipe/external-source 步骤不适用 |
 
-**按场景建页而非按用例**（十万级用例规模）：
+## construction_mode 判定规则
 
-1. AI 基于用例实际脚本计算 `scenario_signature`：`<主接口模板>[<关键判别参数=值>,...]`
-2. 与 case-data 的 `existing_scenarios` 比对：
-   - 无相似 → `merge_mode: "create"`
-   - 签名一致/高度相似 → `merge_mode: "extend"` + `target_scenario_slug` 指向已有页
-3. extend 模式：新用例的参数变体增量合入已有页（参数变体表），严禁覆盖
+| 条件 | construction_mode |
+|------|-------------------|
+| match_kind = exact/semantic/reusable-base 且有 matched_asset_id | asset-plus-patches |
+| match_kind = none/partial 且步骤有完整组件配置 | inline-recipe |
+| 步骤依赖外部系统（如 DB 预置数据） | external-source |
+| 证据不足，无法自动判定 | manual-required |
+
+## 补丁 operation 类型
+
+| operation | 检测逻辑 | 检测方式 |
+|-----------|---------|---------|
+| set-variable | TableSetVar.vars 中资产有占位符、用例填了实际值 | 确定性 |
+| remove-variable | 资产有 vars、用例没有 | 确定性 |
+| add-field | rReq 中用例有、资产没有的字段路径 | 确定性 |
+| replace-field | rReq 中双方都有但值不同 | 确定性 |
+| remove-field | 资产有、用例 rReq 中不存在的字段 | 确定性 |
+| remove-field-override | 用例显式将字段设为空字符串或 null | 确定性 |
+| set-nosend | 用例字段值 = "nosend" | 确定性 |
+| set-nocare | 用例字段值 = "nocare" | 确定性 |
+| set-norecv | 用例字段值 = "norecv" | 确定性 |
+| runtime-bind | 用例字段值匹配 `${var}` | 确定性 |
+| expression-bind | 用例字段值包含 `${G.` 或函数调用语法 | 确定性 |
+| replace-request | 用例 rReq 根结构与资产完全不同 | 确定性 |
+| add-component | 用例组件数 > 资产组件数 | 确定性 |
+| remove-component | 用例组件数 < 资产组件数 | 确定性 |
+| version-drift | 资产有字段但接口文档无定义 | 启发式 |
 
 ## AI 分析任务清单
 
-1. 读 case-data.json：cases（含每步 match + script_deltas）、step_assets、existing_scenarios、interface_fields
-2. 对每个用例：基于实际脚本+接口字段含义判定场景归属（签名判重）
-3. 对每步：确认/修正脚本匹配（tentative 裁决），采纳 matched≥0.75
-4. 对每条 script_delta：补 field_description（查接口文档）+ reason（业务理由）
-5. 提炼 scenario_knowledge 四要素
-6. 分析步骤间数据流 dependencies
-7. 撰写页面草稿到独立 md 文件（8 章节结构见 scenario-schema.md）
-8. 全程在 analysis-notes.md 记录分析证据（每个场景的 scenario_id/name/用例 ID 必须出现）
-
-## 校验规则
-
-validate-analysis.ts 的四层门禁（详见 SKILL.md）：
-
-- **证据链（error）**：--analysis-notes 存在、≥200 字符、每个场景有记录
-- **结构（error）**：必填字段、source_cases 存在、merge_mode 合法、extend 目标存在、signature 非空、page_draft_file 存在且含 frontmatter
-- **一致性（error）**：AI 不得推翻脚本 matched≥0.75；script_deltas 全覆盖
-- **质量（warning）**：field_description 含数据类型；reason 含业务理由词；notability ≥2 用例；wikilink 引用
-
-**errors>0 时不生成 scenario-plan.json，退出码 1。**
+1. 读取完整候选资产 JSON（必须）
+2. 匹配裁决：确认或否决脚本匹配结果
+3. 补丁增强：为每个 ScriptPatchItem 填写 reason/evidence_sources/confidence/field_description/required_for_execution
+4. intent_signature 填写
+5. scenario_name 填写（与 intent 对齐）
+6. test_points 填写
+7. business_entities 填写
+8. variable_dependencies 确认或修正
+9. unresolved_questions 填写
+10. notes 按 Step[N] 格式填写
 
 ## 完整示例
 
-见本文档各章节内联示例。最小可过检草稿要求：1 个场景 + 全部必填字段 + 页面草稿文件 + analysis-notes.md。
+见 `analysis-draft.json` 输出文件。每个场景包含完整的 steps[].patches 数组，每个 patch 有 13 个字段。

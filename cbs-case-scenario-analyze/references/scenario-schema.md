@@ -1,202 +1,193 @@
-# 场景页面 Schema
+# 场景页面 Schema (v2.0)
 
 ## 目录
 
 - [概览](#概览)
-- [Frontmatter 字段](#frontmatter-字段)
-- [8 章节正文结构](#8-章节正文结构)
-- [场景签名与增量维护](#场景签名与增量维护)
+- [页面类型](#页面类型)
+- [scenario-plan 页面](#scenario-plan-页面)
+- [analysis-data 页面](#analysis-data-页面)
+- [安全 extend 合并规则](#安全-extend-合并规则)
 - [Timeline 格式](#timeline-格式)
-- [Wikilink 使用要求](#wikilink-使用要求)
-- [页面草稿位置](#页面草稿位置)
-- [验证规则](#验证规则)
 
 ## 概览
 
-CBS 场景知识页面存储在 GBrain 中，类型为 `cbs-scenario-pattern`。**按场景建页而非按用例**（十万级用例规模，同场景用例增量合入同一页面）。页面的最终消费者是"用例生成 AI"：读知识页 → 知道场景由哪几步组成（asset_id）→ 通过 API/source_path 获取步骤 JSON（template_json）→ 应用知识页记录的参数 Delta → 组装完整用例 JSON → 转 XML 用例文件。
+CBS 场景知识页面存储在 GBrain 中，按场景建页。每个场景包含两个页面：
+- **scenario-plan**：人类可读的场景计划页（Markdown + frontmatter）
+- **analysis-data**：机器可读的结构化数据页（JSON in code block）
 
-页面必须让生成 AI 回答 4 个问题：
+页面消费者是用例生成 AI：读 analysis-data → 获取步骤 recipe（asset_id + patches 或 inline_recipe）→ 通过 API 获取步骤 JSON → 应用 patches → 组装完整用例 JSON → 转 XML。
 
-1. 这个场景是什么、测什么、为什么这样构建（场景定义）
-2. 场景由哪几个步骤组成、每步关联哪个测试步骤资产（步骤编排）
-3. 每个步骤的参数如何在通用资产基础上修改（参数 Delta）
-4. 步骤与步骤之间参数如何传递（步骤间数据流）
+## 页面类型
 
-## Frontmatter 字段
+### scenario-plan 页面
 
-```markdown
+**slug 格式**：`cbs/scenarios/<site-key>/<scenario-id>/scenario-plan`
+
+**frontmatter**:
+```yaml
 ---
-slug: cbs/scenarios/<siteKey>/<scenario-slug>
-type: cbs-scenario-pattern
-title: <场景名称>
-tags: [cbs, scenario, <siteKey>]
-source: cbs-case-scenario-analyze
-scenario_signature: <场景签名，见下文>
-site_key: <siteKey>
+title: <中文场景名>
+description: <一句话描述>
+capability: <业务能力>
+pattern_signature: <模式签名>
+intent_signature: <意图签名>
+variant_signature: <变体签名>
+parameter_signature: <参数签名>
+maturity: provisional | stable
+source_cases: [case-id-1, case-id-2]
+preparation_operations: [OpType=1]
+analysis_data_slug: cbs/scenarios/<site-key>/<scenario-id>/analysis-data
 ---
 ```
 
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| `slug` | 是 | `cbs/scenarios/{siteKey}/{slug_en}`；leaf 来自草稿 `slug_en` 字段（AI 提供的语义化英文 kebab-case），禁止无语义哈希 |
-| `type` | 是 | 固定 `cbs-scenario-pattern` |
-| `title` | 是 | 场景名称（AI 基于实际脚本行为命名，非用例标题） |
-| `tags` | 是 | 至少含 `cbs`、`scenario`、`siteKey` |
-| `source` | 是 | 固定 `cbs-case-scenario-analyze` |
-| `scenario_signature` | 是 | 场景签名，判重与增量合并依据 |
-| `site_key` | 是 | 站点标识 |
+**正文**：Operation Variants 表格 + Parameter Variants 表格 + Test Points 表格 + Business Entities + Notes
 
-## slug_en 命名规范（GBrain 设计理念强制要求）
+### analysis-data 页面
 
-GBrain 中 slug 是页面主键、Markdown 文件路径、FTS 关键词索引锚点、wikilink 图谱节点——必须人类可读且可搜索。禁止 `scenario-<hash8>` 这类无语义命名。
+**slug 格式**：`cbs/scenarios/<site-key>/<scenario-id>/analysis-data`
 
-**格式**：`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`，长度 4-48，2-6 个词
+**内容**：JSON code block，结构如下：
 
-**命名模式**：`<业务对象>-<操作>[-<限定>]`
+```json
+{
+  "schema_version": "2.0.0",
+  "scenario_id": "<scenario-id>",
+  "scenario_name": "<中文名>",
+  "capability": "<业务能力>",
+  "signatures": {
+    "pattern": "<pattern_signature>",
+    "intent": "<intent_signature>",
+    "variant": "<variant_signature>",
+    "parameter": "<parameter_signature>"
+  },
+  "maturity": "provisional",
+  "source_cases": ["case-id-1"],
+  "preparation_operations": ["OpType=1"],
+  "operation_variants": [
+    {
+      "step_index": 3,
+      "interface_template": "Adjustment",
+      "op_type": "OpType=5",
+      "role": "core",
+      "construction_mode": "asset-plus-patches",
+      "matched_asset_id": "10160",
+      "matched_asset_slug": "cbs/test-steps/...",
+      "match_kind": "semantic",
+      "match_reason": "<AI填写>",
+      "inline_recipe": null
+    }
+  ],
+  "parameter_variants": [
+    {
+      "component": "SoapClient",
+      "field_path": "...OpType",
+      "operation": "replace-field",
+      "asset_value": "1",
+      "case_value": "5",
+      "source_case": "case-id-1",
+      "confidence": "confirmed"
+    }
+  ],
+  "business_entities": [
+    {
+      "entity": "FreeUnitInstance",
+      "relation": "operated-on",
+      "created_by": "CreateCustomer",
+      "modified_by": "Adjustment(OpType=5)",
+      "evidence_type": "observed"
+    }
+  ],
+  "variable_dependencies": [
+    {
+      "from_step": 0,
+      "to_step": 3,
+      "variable": "My_AcctKey",
+      "producer_type": "soap-rvars",
+      "consumer_location": "...AcctKey",
+      "evidence": "Step[0] -> Step[3]",
+      "confidence": "confirmed"
+    }
+  ],
+  "test_points": [
+    {
+      "description": "...",
+      "verification_method": "...",
+      "expected_result": "..."
+    }
+  ],
+  "steps": [
+    {
+      "step_index": 3,
+      "step_name": "...",
+      "construction_mode": "asset-plus-patches",
+      "matched_asset_id": "10160",
+      "matched_asset_slug": "cbs/test-steps/...",
+      "match_kind": "semantic",
+      "match_reason": "<AI填写>",
+      "patches": [
+        {
+          "component": "SoapClient",
+          "field_path": "...OpType",
+          "field_name": "OpType",
+          "operation": "replace-field",
+          "asset_value": "1",
+          "case_value": "5",
+          "effective_runtime_value": "5",
+          "field_description": "<AI填写>",
+          "reason": "<AI填写>",
+          "evidence_sources": ["observed", "documented"],
+          "confidence": "confirmed",
+          "required_for_execution": true,
+          "unresolved_question": null
+        }
+      ],
+      "inline_recipe": null,
+      "reconstruction": {
+        "status": "semantic-equivalent",
+        "key_field_coverage": 0.95,
+        "total_field_coverage": 0.88,
+        "unexplained_differences": []
+      },
+      "variable_inputs": ["My_AcctKey"],
+      "variable_outputs": ["My_AdjResult"]
+    }
+  ],
+  "unresolved_questions": []
+}
+```
 
-| 词性 | 推荐词汇（领域词表） |
-|------|------|
-| 业务对象 | freeunit（免费资源）/ balance（余额）/ credit（信用度）/ subscriber（用户）/ customer（客户）/ account（账户）/ reward（奖励金）/ autobuy（自动订购）/ feequote（费用探寻）/ pa（承诺付费） |
-| 操作 | create / adjust（调账）/ expire（失效）/ reset（重置）/ query / explore / increase / decrease / open（开户）/ close |
-| 限定 | optype5 / prepaid（预付费）/ postpaid（后付费）/ month-end（月结） |
+## 安全 extend 合并规则
 
-**示例**：
-- `freeunit-expire-reset`（免费资源失效时间重置，OpType=5）
-- `subscriber-create-postpaid`（后付费开户）
-- `balance-adjust-decrease`（余额调减）
-- `reward-autobuy-month-end`（奖励金+AutoBuy+月结）
+写入 analysis-data 前必须执行：
 
-**校验**（validate-analysis 硬门禁）：占位值（todo-*）/ 格式非法 / 页面 frontmatter slug 与草稿 slug_en 推导结果不一致 → 全部 error。
+1. **回读**：`gbrain get` 读取现有 analysis-data 页面
+2. **解析**：解析已有 JSON 结构
+3. **合并规则**：
 
-## 8 章节正文结构
+| 字段 | 合并策略 |
+|------|---------|
+| source_cases | 并集 |
+| signatures | 不变（同场景才 extend） |
+| maturity | 取最高值（stable > provisional） |
+| operation_variants | 并集（按 step_index + op_type 去重） |
+| parameter_variants | 并集（按 component + field_path + operation 去重） |
+| steps | 按 step_index 合并；patches 追加（不覆盖已有 patch） |
+| steps.reconstruction | 保留最新 |
+| business_entities | 并集（按 entity 去重） |
+| variable_dependencies | 并集 |
+| test_points | 并集 |
+| unresolved_questions | 并集，永不删除 |
 
-### 1. 场景定义
-
-- 场景一句话描述、业务目的
-- 测试点列表：每个测试点关联的关键参数及解释（为什么这样构建用例）
-- 前置条件、预期结果
-
-### 2. 步骤编排
-
-| 顺序 | 步骤行为 | 资产名称 | asset_id | GBrain 页 | 匹配置信度 |
-|------|----------|----------|----------|-----------|------------|
-| 1 | 创建客户 | 创建客户 | 88c5af8f-... | [[cbs/steps/.../create-customer]] | 0.95 |
-
-- asset_id 是测试资产平台真实 ID，生成用例时凭它经 API 获取步骤 JSON
-- GBrain 页 slug 用 wikilink 引用（自动建链）
-
-### 3. 参数 Delta（每步一节）
-
-在通用步骤资产 template_json 之上的精确修改清单（脚本已预算，AI 补充业务理由）：
-
-| 组件 | 变量 | 变更 | 资产值 | 场景值 | 业务理由 |
-|------|------|------|--------|--------|----------|
-| TableSetVar | My_InitBalance | modify | `${My_InitBalance}` | `0` | 后付费场景初始余额为 0 |
-| TableSetVar | My_PaymentMode | add | ∅ | `1` | 标识后付费模式 |
-| TableSetVar | My_AcctPaymentType | remove | `${My_AcctPaymentType}` | ∅ | 本场景不涉及 |
-
-- 变更类型：`add` / `remove` / `modify`
-- 业务理由必须解释"为什么设置这个值"，而非仅描述"值是什么"
-
-### 4. 步骤间数据流
-
-| 来源步骤 | 目标步骤 | 来源参数 | 目标参数 | 类型 | 说明 |
-|----------|----------|----------|----------|------|------|
-| 1 创建客户 | 2 调账 | My_CustomerId | My_AcctId | variable-reference | 创建输出的客户 ID 定位调账账户 |
-
-### 5. 验证点
-
-每个验证步骤检查什么、期望值如何从前面步骤导出。
-
-### 6. 参数变体表（增量维护核心）
-
-同场景不同用例的参数取值变体，增量合入而非覆盖：
-
-| 参数 | 用例 A | 用例 B | 说明 |
-|------|--------|--------|------|
-| My_InitBalance | 0 | `${900*C_ChargePrecision}` | 初始余额变体 |
-
-### 7. 无资产步骤（如有）
-
-未匹配到资产的步骤：组件序列、接口模板、关键参数结构、入库建议（missing_step_suggestions）。
-
-### 8. 用例生成指引
-
-面向生成 AI 的组装说明：获取资产 JSON 的方式（API 优先，source_path 兜底）、delta 应用顺序、变量替换规则。
-
-## 场景签名与增量维护
-
-### scenario_signature 格式
-
-`<主接口模板>[<关键判别参数=值>, ...]`，示例：
-
-- `Adjustment[OpType=5,FreeUnitAdjustmentInfo]` — 免费资源失效调账
-- `CreateSubscriber[PaymentMode=1]+CreatePA[]+Payment[]` — PA 承诺付费
-
-签名由 AI 基于用例实际脚本（rTpl + 关键参数值）生成，用于：
-
-1. **判重**：新用例分析时，AI 计算签名并与 `case-data.json` 的 `existing_scenarios` 对比
-2. **merge_mode 决策**：
-   - `create`：签名与所有已有场景不相似 → 新建页面
-   - `extend`：签名与某已有场景一致/高度相似 → 增量合入该页（`target_scenario_slug` 指向目标页）
-
-### extend 模式行为
-
-- 页面 slug 沿用 `target_scenario_slug`
-- 新用例的参数变体追加到"参数变体表"
-- 新发现的 delta 追加到"参数 Delta"
-- Timeline 追加 `extend: merged cases ...` 条目（含幂等 marker）
-- 严禁覆盖已有 Compiled Truth 内容
+4. **冲突处理**：同 step_index + 同 field_path 但不同 case_value → 保留两者，生成 unresolved_question
+5. **写入**：写入合并后的 JSON
 
 ## Timeline 格式
 
-Timeline 位于正文 `---` 分隔符之后，追加式证据链：
-
-```markdown
-### <ISO 时间戳> | cbs-case-scenario-analyze
-
-create: from historical cases: US-001, US-003 [idem:cbs-scenario|<hash16>]
-
-- 计划 SHA-256：<hash 前 16 位>
+```json
+{
+  "slug": "cbs/scenarios/<site-key>/<scenario-id>/scenario-plan",
+  "date": "2026-08-11",
+  "entry": "ingest case US-20251120... (v2.0.0)",
+  "idempotency_marker": "sha256:<hash-of-source-case>"
+}
 ```
-
-- extend 模式条目：`extend: merged cases US-007 into existing scenario [idem:...]`
-- 幂等 marker 由脚本生成，重复执行自动跳过
-
-## Wikilink 使用要求
-
-GBrain `put` 时自动从正文提取 `[[wikilink]]` 建链：
-
-1. 步骤编排表中 GBrain 页 slug 必须 `[[...]]` 包裹
-2. 场景间关联用 wikilink 引用
-3. 不使用别名语法 `[[slug|alias]]`
-4. wikilink 与 `gbrain link` 的 typed edges 互补，都不可省略
-
-## 页面草稿位置
-
-页面草稿**不内嵌**在 analysis-draft.json 中（避免 JSON 转义地狱），而是：
-
-- 每个场景一个独立 md 文件：`page-<scenario_id>.md`（与 analysis-draft.json 同目录）
-- 草稿 JSON 中 `scenarios[].page_draft_file` 字段记录文件名（相对路径）
-- validate-analysis.ts 校验文件存在、含 `type: cbs-scenario-pattern` frontmatter、正文 ≥100 字符
-
-## 验证规则
-
-脚本校验页面草稿时检查：
-
-1. frontmatter 含 `type: cbs-scenario-pattern`
-2. 正文 ≥100 字符
-3. 步骤编排表中已匹配资产的 slug 以 `[[...]]` 引用（warning）
-4. merge_mode=extend 时 target_scenario_slug 必须存在于 GBrain 已有场景列表（error）
-5. 脚本计算的每条 script_delta 必须在 AI 的 param_deltas 中出现且带业务理由（error）
-6. AI 不得推翻脚本高置信匹配（matched ≥0.75 被置空 → error）
-
-## 与步骤资产页面的关系
-
-```
-cbs/scenarios/<siteKey>/<scenario>
-  --composed_of_step--> cbs/steps/<siteKey>/<step>     （仅置信度 ≥0.75）
-  --evidenced_by-----> cbs/cases/<case_id>
-```
-
-步骤资产页之间：`--param_flows_to-->`（步骤间数据流，两端都有资产 slug 时创建）。
