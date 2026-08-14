@@ -32,12 +32,11 @@ mutating: true
 bun scripts/extract-case-data.ts \
   --cases <case-dir-or-file> \
   --asset-ids <id1,id2,...> \
-  --asset-api-url <url> --asset-api-user <user> --asset-api-pass <pass> \
   [--interface-doc <doc.md>] [--common-structure <doc.md>] \
   --out <output-dir>
 ```
 
-**关键**：`--asset-ids` 和 `--asset-api-url/user/pass` 是获取步骤资产的核心参数。脚本会直接用这些 ID 调用 API 获取资产 JSON，不依赖 GBrain。API 地址默认 `http://localhost:5000`。
+**关键**：`--asset-ids` 是获取步骤资产的核心参数。脚本会直接用这些 ID 调用 API 获取资产 JSON（API 地址和账号密码已内置，无需额外指定），不依赖 GBrain。
 
 **输出**：`<output-dir>/case-data.json`（含 `step_assets[].full_json` 完整资产数据）
 
@@ -47,7 +46,6 @@ bun scripts/extract-case-data.ts \
 
 ```
 bun scripts/fetch-asset-by-id.ts \
-  --api-url <url> --username <user> --password <pass> \
   --asset-id <id1> [--asset-id <id2> ...] \
   --out-dir <asset-dir>
 ```

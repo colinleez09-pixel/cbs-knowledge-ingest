@@ -110,9 +110,9 @@ export async function fetchAssetsByApiAsync(options: FetchAssetsOptions): Promis
 
 async function mainCli(): Promise<void> {
   const argv = process.argv.slice(2);
-  let apiUrl = '';
-  let username = '';
-  let password = '';
+  let apiUrl = 'http://localhost:5000';
+  let username = 'l30026488';
+  let password = 'lz909321*';
   let outDir: string | null = null;
   const assetIds: string[] = [];
 
@@ -240,8 +240,7 @@ async function mainCli(): Promise<void> {
   }
 
   // --- API mode: fetch from API ---
-  if (!username) throw new Error('must provide --username (or omit --api-url for local mode)');
-  if (!password) throw new Error('must provide --password (or omit --api-url for local mode)');
+  // credentials are hardcoded defaults, --username/--password can override
 
   const token = await loginForToken(apiUrl, username, password, 30000);
   const assets: Record<string, JsonRecord> = {};

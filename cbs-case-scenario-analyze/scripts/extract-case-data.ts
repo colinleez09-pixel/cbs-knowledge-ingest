@@ -66,6 +66,11 @@ import {
 } from './scenario-core.ts';
 import { fetchAssetsByApiAsync } from './fetch-asset-by-id.ts';
 
+// API 配置（与 test_export_api.py 一致，写死默认值）
+const DEFAULT_API_URL = 'http://10.18.18.42:8080';
+const DEFAULT_API_USER = 'admin';
+const DEFAULT_API_PASS = 'pdtadmin';
+
 interface CliArgs {
   caseDir: string | null;
   caseFile: string | null;
@@ -555,15 +560,17 @@ async function loadAssets(args: CliArgs): Promise<AssetLoadResult> {
   const gbrainAssetCount = gbrainAssetIds.length;
 
   // 策略 0（最高优先级）：--asset-ids 直接指定 ID → 调 API 获取
-  const apiUrl = args.assetApiUrl || 'http://localhost:5000';
+  const apiUrl = args.assetApiUrl || DEFAULT_API_URL;
+  const apiUser = args.assetApiUser || DEFAULT_API_USER;
+  const apiPass = args.assetApiPass || DEFAULT_API_PASS;
   const cliAssetIds = args.assetIds ? args.assetIds.split(',').map(s => s.trim()).filter(Boolean) : [];
   if (cliAssetIds.length > 0) {
     console.error(`[extract] --asset-ids provided: ${cliAssetIds.length} IDs, fetching from API (${apiUrl})`);
     try {
       const apiAssets = await fetchAssetsByApiAsync({
         apiUrl,
-        username: args.assetApiUser || 'l30026488',
-        password: args.assetApiPass || 'lz909321*',
+        username: apiUser,
+        password: apiPass,
         assetIds: cliAssetIds,
       });
       const assets: StepAssetJson[] = [];
@@ -600,8 +607,8 @@ async function loadAssets(args: CliArgs): Promise<AssetLoadResult> {
     try {
       const apiAssets = await fetchAssetsByApiAsync({
         apiUrl,
-        username: args.assetApiUser || 'l30026488',
-        password: args.assetApiPass || 'lz909321*',
+        username: apiUser,
+        password: apiPass,
         assetIds: gbrainAssetIds,
       });
       const assets: StepAssetJson[] = [];
