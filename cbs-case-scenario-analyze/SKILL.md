@@ -31,28 +31,23 @@ mutating: true
 ```
 bun scripts/extract-case-data.ts \
   --cases <case-dir-or-file> \
-  --asset-dir <asset-dir> \
-  [--api-url <url> --api-user <user> --api-pass <pass>] \
+  --asset-ids <id1,id2,...> \
+  --asset-api-url <url> --asset-api-user <user> --asset-api-pass <pass> \
   [--interface-doc <doc.md>] [--common-structure <doc.md>] \
   --out <output-dir>
 ```
 
-**输出**：`<output-dir>/case-data.json`
-**下一步**：从 case-data.json 中提取所有候选资产 ID（`step_assets[].asset_id`），传入 Step 2。
+**关键**：`--asset-ids` 和 `--asset-api-url/user/pass` 是获取步骤资产的核心参数。脚本会直接用这些 ID 调用 API 获取资产 JSON，不依赖 GBrain。API 地址默认 `http://localhost:5000`。
 
-### Step 2: 获取完整资产 JSON（不可跳过）
+**输出**：`<output-dir>/case-data.json`（含 `step_assets[].full_json` 完整资产数据）
 
-**动作**：批量获取所有候选资产的完整 JSON。**必须优先通过 API 获取**；仅当用户未提供 API 参数时才读取本地文件。
+### Step 2: 确认资产获取结果
+
+**动作**：检查 case-data.json 中 `step_assets` 是否包含 `full_json`。如果 Step 1 已通过 API 获取到完整 JSON，此步可跳过。如果 full_json 为 null（API 未获取到），则需单独执行：
 
 ```
-# 有 API 时（必须使用）
 bun scripts/fetch-asset-by-id.ts \
   --api-url <url> --username <user> --password <pass> \
-  --asset-id <id1> [--asset-id <id2> ...] \
-  --out-dir <asset-dir>
-
-# 无 API 时（兜底）
-bun scripts/fetch-asset-by-id.ts \
   --asset-id <id1> [--asset-id <id2> ...] \
   --out-dir <asset-dir>
 ```
@@ -182,8 +177,8 @@ bun scripts/apply-scenario.ts \
 
 ## 禁止事项
 
-- **禁止跳过 Step 2**：必须运行 fetch-asset-by-id.ts 获取资产 JSON，不允许自行搜索本地文件
-- **禁止自行查找资产**：AI 不得使用 find/ls 等命令搜索 steps/ 目录或其他路径获取资产 JSON，必须从 Step 2 的输出目录读取
+- **禁止跳过 API 获取资产**：必须在 extract-case-data.ts 中通过 `--asset-ids` + `--asset-api-url/user/pass` 参数直接从 API 获取资产 JSON，不得依赖 GBrain 或自行搜索本地文件
+- **禁止自行查找资产**：AI 不得使用 find/ls 等命令搜索 steps/ 目录或其他路径获取资产 JSON
 - **禁止跳过 Step 4**：AI 必须完成全部语义分析才能进入 Step 5
 - **禁止仅凭脚本分数决定匹配**：必须读取完整候选资产 JSON 后裁决
 - **禁止提交无 reason 的补丁**：所有补丁必须有 reason（≥5字符）和 evidence_sources

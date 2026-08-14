@@ -75,6 +75,7 @@ interface CliArgs {
   assetApiUrl: string | null;
   assetApiUser: string | null;
   assetApiPass: string | null;
+  assetIds: string | null;
   out: string | null;
   outDir: string | null;
   gbrain: string;
@@ -90,6 +91,7 @@ function parseArgs(argv: string[]): CliArgs {
     assetApiUrl: null,
     assetApiUser: null,
     assetApiPass: null,
+    assetIds: null,
     out: null,
     outDir: null,
     gbrain: 'gbrain',
@@ -104,6 +106,7 @@ function parseArgs(argv: string[]): CliArgs {
     else if (arg === '--asset-api-url') args.assetApiUrl = argv[++i] ?? '';
     else if (arg === '--asset-api-user') args.assetApiUser = argv[++i] ?? '';
     else if (arg === '--asset-api-pass') args.assetApiPass = argv[++i] ?? '';
+    else if (arg === '--asset-ids') args.assetIds = argv[++i] ?? '';
     else if (arg === '--out') args.out = argv[++i] ?? '';
     else if (arg === '--out-dir') args.outDir = argv[++i] ?? '';
     else if (arg === '--gbrain') args.gbrain = argv[++i] ?? 'gbrain';
@@ -551,9 +554,48 @@ async function loadAssets(args: CliArgs): Promise<AssetLoadResult> {
   const gbrainAssetIds = Object.keys(assetIdToSlug);
   const gbrainAssetCount = gbrainAssetIds.length;
 
-  // 策略 1：API（正确流程：GBrain 获取 asset_id → 调 API 获取 JSON）
-  // API 默认地址 http://localhost:5000，用户可通过 --asset-api-url 覆盖
+  // 策略 0（最高优先级）：--asset-ids 直接指定 ID → 调 API 获取
   const apiUrl = args.assetApiUrl || 'http://localhost:5000';
+  const cliAssetIds = args.assetIds ? args.assetIds.split(',').map(s => s.trim()).filter(Boolean) : [];
+  if (cliAssetIds.length > 0) {
+    console.error(`[extract] --asset-ids provided: ${cliAssetIds.length} IDs, fetching from API (${apiUrl})`);
+    try {
+      const apiAssets = await fetchAssetsByApiAsync({
+        apiUrl,
+        username: args.assetApiUser || 'l30026488',
+        password: args.assetApiPass || 'lz909321*',
+        assetIds: cliAssetIds,
+      });
+      const assets: StepAssetJson[] = [];
+      for (const assetId of cliAssetIds) {
+        const raw = apiAssets[assetId];
+        if (!isRecord(raw)) {
+          console.error(`[extract] WARNING: API returned no data for asset_id ${assetId}`);
+          continue;
+        }
+        try {
+          assets.push(
+            parseStepAssetJson(raw, {
+              sourceKind: 'api',
+              sourceFile: `api:${assetId}`,
+              sourcePath: assetIdToSlug[assetId] ? slugToMeta[assetIdToSlug[assetId]]?.source_path ?? null : null,
+            }),
+          );
+        } catch (e) {
+          console.error(`[extract] WARNING: failed to parse API asset ${assetId}: ${e}`);
+        }
+      }
+      if (assets.length > 0) {
+        console.error(`[extract] loaded ${assets.length} step assets from API via --asset-ids (${apiUrl})`);
+        return { assets, assetSlugs: assetIdToSlug, source: 'api', gbrainAssetCount, gbrainAssetIds, apiUrl };
+      }
+      console.error(`[extract] --asset-ids API fetch returned 0 parseable assets`);
+    } catch (e) {
+      console.error(`[extract] WARNING: --asset-ids API fetch failed (${apiUrl}): ${e}`);
+    }
+  }
+
+  // 策略 1：GBrain 获取 asset_id → 调 API 获取 JSON
   if (gbrainAssetIds.length > 0) {
     try {
       const apiAssets = await fetchAssetsByApiAsync({
