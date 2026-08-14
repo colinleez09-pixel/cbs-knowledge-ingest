@@ -635,19 +635,22 @@ export function execSyncSafe(cmd: string): SpawnSyncReturns<string> {
   }
 }
 
-export function gbrainList(gbrain: string, prefix: string): { items: GbrainListItem[] } {
-  const r = execSyncSafe(`"${gbrain}" list "${prefix}"`);
+export function gbrainList(gbrain: string, typeOrTag: string, filterMode: 'type' | 'tag' = 'type'): { items: GbrainListItem[] } {
+  const flag = filterMode === 'type' ? '--type' : '--tag';
+  const r = execSyncSafe(`"${gbrain}" list ${flag} "${typeOrTag}"`);
   const items: GbrainListItem[] = [];
   const stdout = r.stdout || '';
   for (const line of stdout.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const m = trimmed.match(/^- \[(.+?)\]\s*(.*)$/);
-    if (m) {
-      items.push({ slug: m[1], title: m[2] || m[1] });
-    } else if (trimmed.match(/^[a-z]/) && trimmed.includes('/')) {
-      const parts = trimmed.split(/\s{2,}|\t/);
-      if (parts.length >= 1) items.push({ slug: parts[0].trim(), title: parts[1] || parts[0] });
+    // gbrain list output format: <slug>\t<type>\t<date>\t<title>
+    // or with multiple spaces between columns
+    const parts = trimmed.split(/\s{2,}|\t/);
+    if (parts.length >= 1 && parts[0].match(/^[a-z]/) && parts[0].includes('/')) {
+      const slug = parts[0].trim();
+      // title is the last column (may contain spaces)
+      const title = parts.length >= 4 ? parts.slice(3).join(' ').trim() : (parts[1] || slug);
+      items.push({ slug, title });
     }
   }
   return { items };

@@ -525,16 +525,9 @@ function loadAssetMetaFromGbrain(gbrain: string): {
   const slugToMeta: Record<string, { asset_id: string; source_path: string | null }> = {};
   const assetIdToSlug: Record<string, string> = {};
 
-  const prefixes = ['cbs/test-step', 'cbs-test-step', 'test-step'];
-  let items: { slug: string; title: string }[] = [];
-  for (const pfx of prefixes) {
-    const result = gbrainList(gbrain, pfx);
-    console.error(`[extract] gbrain list "${pfx}": ${result.items.length} pages`);
-    if (result.items.length > 0) {
-      items = result.items;
-      break;
-    }
-  }
+  const result = gbrainList(gbrain, 'cbs-test-step', 'type');
+  console.error(`[extract] gbrain list --type cbs-test-step: ${result.items.length} pages`);
+  const items = result.items;
 
   for (const item of items) {
     try {
@@ -694,7 +687,7 @@ async function loadAssets(args: CliArgs): Promise<AssetLoadResult> {
 function listExistingScenarios(gbrain: string, siteKey: string | null): CaseDataFile['existing_scenarios'] {
   const scenarios: CaseDataFile['existing_scenarios'] = [];
   try {
-    const { items } = gbrainList(gbrain, 'cbs-scenario-pattern');
+    const { items } = gbrainList(gbrain, 'cbs-scenario-pattern', 'type');
     for (const item of items) {
       if (siteKey && !item.slug.includes(siteKey)) continue;
       scenarios.push({ slug: item.slug, title: item.title || item.slug });
