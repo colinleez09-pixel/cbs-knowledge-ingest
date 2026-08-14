@@ -635,8 +635,8 @@ export function execSyncSafe(cmd: string): SpawnSyncReturns<string> {
   }
 }
 
-export function gbrainList(gbrain: string, tag: string): { items: GbrainListItem[] } {
-  const r = execSyncSafe(`"${gbrain}" list --tag "${tag}"`);
+export function gbrainList(gbrain: string, prefix: string): { items: GbrainListItem[] } {
+  const r = execSyncSafe(`"${gbrain}" list "${prefix}"`);
   const items: GbrainListItem[] = [];
   const stdout = r.stdout || '';
   for (const line of stdout.split('\n')) {
@@ -645,6 +645,9 @@ export function gbrainList(gbrain: string, tag: string): { items: GbrainListItem
     const m = trimmed.match(/^- \[(.+?)\]\s*(.*)$/);
     if (m) {
       items.push({ slug: m[1], title: m[2] || m[1] });
+    } else if (trimmed.match(/^[a-z]/) && trimmed.includes('/')) {
+      const parts = trimmed.split(/\s{2,}|\t/);
+      if (parts.length >= 1) items.push({ slug: parts[0].trim(), title: parts[1] || parts[0] });
     }
   }
   return { items };

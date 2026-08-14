@@ -67,9 +67,9 @@ import {
 import { fetchAssetsByApiAsync } from './fetch-asset-by-id.ts';
 
 // API 配置（与 test_export_api.py 一致，写死默认值）
-const DEFAULT_API_URL = 'http://10.18.18.42:8080';
-const DEFAULT_API_USER = 'admin';
-const DEFAULT_API_PASS = 'pdtadmin';
+const DEFAULT_API_URL = 'http://localhost:5000';
+const DEFAULT_API_USER = 'l30026488';
+const DEFAULT_API_PASS = 'lz909321*';
 
 interface CliArgs {
   caseDir: string | null;
@@ -525,8 +525,16 @@ function loadAssetMetaFromGbrain(gbrain: string): {
   const slugToMeta: Record<string, { asset_id: string; source_path: string | null }> = {};
   const assetIdToSlug: Record<string, string> = {};
 
-  const { items } = gbrainList(gbrain, 'cbs-test-step');
-  console.error(`[extract] gbrain list cbs-test-step: ${items.length} pages`);
+  const prefixes = ['cbs/test-step', 'cbs-test-step', 'test-step'];
+  let items: { slug: string; title: string }[] = [];
+  for (const pfx of prefixes) {
+    const result = gbrainList(gbrain, pfx);
+    console.error(`[extract] gbrain list "${pfx}": ${result.items.length} pages`);
+    if (result.items.length > 0) {
+      items = result.items;
+      break;
+    }
+  }
 
   for (const item of items) {
     try {
