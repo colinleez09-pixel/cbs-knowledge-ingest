@@ -672,6 +672,24 @@ export function gbrainTimelineAdd(gbrain: string, slug: string, timestamp: strin
   return { success: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
+export function gbrainGraphQuery(gbrain: string, slug: string, linkType?: string): GbrainGetResult {
+  const cmd = linkType
+    ? `"${gbrain}" graph-query "${slug}" --link-type "${linkType}"`
+    : `"${gbrain}" graph-query "${slug}"`;
+  const r = execSyncSafe(cmd);
+  return { success: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
+
+export function gbrainStats(gbrain: string): GbrainGetResult {
+  const r = execSyncSafe(`"${gbrain}" stats`);
+  return { success: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
+
+export function runGbrain(gbrain: string, args: string): GbrainGetResult {
+  const r = execSyncSafe(`"${gbrain}" ${args}`);
+  return { success: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
+
 export function parseGbrainGetOutput(stdout: string): { frontmatter: JsonRecord; body: string } {
   const fmMatch = stdout.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
   if (!fmMatch) return { frontmatter: {}, body: stdout };

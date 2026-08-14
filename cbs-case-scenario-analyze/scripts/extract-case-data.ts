@@ -41,7 +41,7 @@ import {
   gbrainList,
   isExpression,
   isRecord,
-  isSpecialValue,
+  detectSpecialValue,
   isVariableRef,
   matchStepToAssets,
   normalizeTemplateName,
@@ -791,7 +791,7 @@ async function main(): Promise<void> {
                   value: strVal,
                   is_variable_ref: isVariableRef(strVal),
                   variable_name: extractVariableName(strVal),
-                  is_special_value: isSpecialValue(strVal),
+                  is_special_value: detectSpecialValue(strVal),
                   is_expression: isExpression(strVal),
                 });
               }
@@ -801,7 +801,7 @@ async function main(): Promise<void> {
                 value: val,
                 is_variable_ref: isVariableRef(val),
                 variable_name: extractVariableName(val),
-                is_special_value: isSpecialValue(val),
+                is_special_value: detectSpecialValue(val),
                 is_expression: isExpression(val),
               });
             }
