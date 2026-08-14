@@ -420,7 +420,13 @@ function runReconstructionGate(
     }
 
     // Apply patches to a deep clone of the asset's components
-    const reconstructed = applyPatches(deepClone(asset.full_json), step.patches);
+    const fullJson = asset.full_json as any;
+    const assetComponents = Array.isArray(fullJson?.components) ? fullJson.components : (Array.isArray(fullJson) ? fullJson : null);
+    if (!assetComponents) {
+      pushIssue(issues, scenario.scenario_id, 'RG', `Step[${step.step_index}]: asset full_json has no components array — cannot run reconstruction`, 'warning');
+      continue;
+    }
+    const reconstructed = applyPatches(deepClone(assetComponents), step.patches);
 
     // Get original step components from case data
     const original = caseStep.components;
